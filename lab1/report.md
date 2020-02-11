@@ -573,3 +573,33 @@ target remote :1234
 
 # 练习4
 > 分析bootloader加载ELF格式的OS的过程
+>
+> 通过阅读bootmain.c，了解bootloader如何加载ELF文件。通过分析源代码和通过qemu来运行并调试bootloader&OS。
+> - bootloader如何读取硬盘扇区的？
+> - bootloader是如何加载ELF格式的OS？
+
+**bootloader如何读取硬盘扇区的？**
+> CPU使用[LBA模式](https://blog.csdn.net/cosmoslife/article/details/9029657)的PIO(Program IO)方式来访问硬盘
+> 的（即所有的IO操作是通过CPU访问硬盘的IO地址寄存器完成）。
+>
+> 读取的流程：
+> 1. 等待磁盘准备好
+> 2. 发出读取扇区的命令
+> 3. 等待磁盘准备好
+> 4. 把磁盘扇区数据读到指定内存
+
+| IO地址 | 功能 |
+| --- | --- |
+| 0x1f0 | 读数据，当0x1f7不为忙状态时，可以读。|
+| 0x1f2 | 要读写的扇区数 |
+| 0x1f3 | 若是LBA模式，则为LBA的0-7位 |
+| 0x1f4 | 若是LBA模式，则为LBA的8-15位 |
+| 0x1f5 | 若是LBA模式，则为LBA的16-23位 |
+| 0x1f6 | 第0-3位，若是LBA模式，则为LBA的24-27位；第4位，主盘为0，从盘为1 |
+| 0x1f7 | 状态和命令寄存器。操作时先给命令，再读取，如果不是忙状态就从0x1f0端口读数据 |
+
+**bootloader是如何加载ELF格式的OS？**
+> 1. 从硬盘读取第一页(4KB)到内存0x10000处
+> 2. 检查是否为ELF格式，即检查开头四个字节的magic number是否为0x7f 45 4c 4d
+> 3. 根据ELF header找到program header，然后逐个加载各个段
+> 4. 根据ELF header中的入口信息，找到内核入口，并执行
