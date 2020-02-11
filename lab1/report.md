@@ -603,3 +603,50 @@ target remote :1234
 > 2. 检查是否为ELF格式，即检查开头四个字节的magic number是否为0x7f 45 4c 4d
 > 3. 根据ELF header找到program header，然后逐个加载各个段
 > 4. 根据ELF header中的入口信息，找到内核入口，并执行
+
+# 练习5
+> 实现函数调用跟踪堆栈
+格式：
+```
+ebp:0x00007b28 eip:0x00100992 args:0x00010094 0x00010094 0x00007b58 0x00100096
+    kern/debug/kdebug.c:305: print_stackframe+22
+```
+
+**代码：**
+```c
+void
+print_stackframe(void) {
+     /* LAB1 YOUR CODE : STEP 1 */
+     /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
+      * (2) call read_eip() to get the value of eip. the type is (uint32_t);
+      * (3) from 0 .. STACKFRAME_DEPTH
+      *    (3.1) printf value of ebp, eip
+      *    (3.2) (uint32_t)calling arguments [0..4] = the contents in address (uint32_t)ebp +2 [0..4]
+      *    (3.3) cprintf("\n");
+      *    (3.4) call print_debuginfo(eip-1) to print the C calling function name and line number, etc.
+      *    (3.5) popup a calling stackframe
+      *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
+      *                   the calling funciton's ebp = ss:[ebp]
+      */
+      uint32_t ebp;
+      uint32_t eip;
+      uint32_t* p_args;
+
+      ebp = read_ebp();
+      eip = read_eip();
+      
+      int i;
+      int j;
+      for(i = 0; ebp != 0 && i < STACKFRAME_DEPTH; i ++){
+          cprintf("ebp:0x%08x eip:0x%08x args:", ebp, eip);
+          p_args = (uint32_t*)ebp + 2;
+          for(j = 0; j < 4; j ++){
+            cprintf("0x%08x ", p_args[j]);
+          }
+          cprintf("\n");
+          print_debuginfo(eip - 1);
+          eip = *((uint32_t *)(ebp + 4));
+          ebp = *((uint32_t *)ebp);
+      }
+}
+```
