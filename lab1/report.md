@@ -650,3 +650,91 @@ print_stackframe(void) {
       }
 }
 ```
+
+
+# 练习6
+> 完善中断初始化和处理
+
+**1. 中断描述符表（也可简称为保护模式下的中断向量表）中一个表项占多少字节？其中哪几位代表中断处理代码的入口？**
+
+> 中断描述符一个表项占8个字节，第三四个字节为段选择子，最低的两个字节和最高的两个字节构成偏移值
+
+**2. 请编程完善kern/trap/trap.c中对中断向量表进行初始化的函数idt_init。在idt_init函数中，依次对所有中断入口进行初始化。使用mmu.h中的SETGATE宏，填充idt数组内容。每个中断的入口由tools/vectors.c生成，使用trap.c中声明的vectors数组即可。**
+```c
+void
+idt_init(void) {
+     /* LAB1 YOUR CODE : STEP 2 */
+     /* (1) Where are the entry addrs of each Interrupt Service Routine (ISR)?
+      *     All ISR's entry a
+      extern uintptr_t __vectors[];ddrs are stored in __vectors. where is uintptr_t __vectors[] ?
+      *     __vectors[] is in kern/trap/vector.S which is produced by tools/vector.c
+      *     (try "make" command in lab1, then you will find vector.S in kern/trap DIR)
+      *     You can use  "extern uintptr_t __vectors[];" to define this extern variable which will be used later.
+      * (2) Now you should setup the entries of ISR in Interrupt Description Table (IDT).
+      *     Can you see idt[256] in this file? Yes, it's IDT! you can use SETGATE macro to setup each item of IDT
+      * (3) After setup the contents of IDT, you will let CPU know where is the IDT by using 'lidt' instruction.
+      *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
+      *     Notice: the argument of lidt is idt_pd. try to find it!
+      */
+
+      // uintptr_t __vectors[] is defined in vectors.S, so we refer to it using the keyword 'extern'.
+      extern uintptr_t __vectors[];
+      // the length of IDT.
+      const uint32_t length = sizeof(idt) / sizeof(struct gatedesc);
+      // Setup the entries of ISR in IDT.
+      uint32_t i;
+      for(i = 0; i < length; i ++){
+          SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+      }
+      SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_KERNEL);
+      // Tell the CPU where and how long is the IDT,
+      // i.e., load IDT's base address and limit into IDTR.
+      lidt(&idt_pd);
+}
+```
+
+**3. 请编程完善trap.c中的中断处理函数trap，在对时钟中断进行处理的部分填写trap函数中处理时钟中断的部分，使操作系统每遇到100次时钟中断后，调用print_ticks子程序，向屏幕上打印一行文字“100 ticks”。**
+```c
+static void
+trap_dispatch(struct trapframe *tf) {
+    char c;
+
+    switch (tf->tf_trapno) {
+    case IRQ_OFFSET + IRQ_TIMER:
+        /* LAB1 YOUR CODE : STEP 3 */
+        /* handle the timer interrupt */
+        /* (1) After a timer interrupt, you should record this event using a global variable (increase it), such as ticks in kern/driver/clock.c
+         * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
+         * (3) Too Simple? Yes, I think so!
+         */
+        ticks ++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
+        break;
+    case IRQ_OFFSET + IRQ_COM1:
+        c = cons_getc();
+        cprintf("serial [%03d] %c\n", c, c);
+        break;
+    case IRQ_OFFSET + IRQ_KBD:
+        c = cons_getc();
+        cprintf("kbd [%03d] %c\n", c, c);
+        break;
+    //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
+    case T_SWITCH_TOU:
+    case T_SWITCH_TOK:
+        panic("T_SWITCH_** ??\n");
+        break;
+    case IRQ_OFFSET + IRQ_IDE1:
+    case IRQ_OFFSET + IRQ_IDE2:
+        /* do nothing */
+        break;
+    default:
+        // in kernel, it must be a mistake
+        if ((tf->tf_cs & 3) == 0) {
+            print_trapframe(tf);
+            panic("unexpected trap in kernel.\n");
+        }
+    }
+}
+```

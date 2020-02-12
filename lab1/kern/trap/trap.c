@@ -31,12 +31,14 @@ static struct pseudodesc idt_pd = {
     sizeof(idt) - 1, (uintptr_t)idt
 };
 
+
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
 void
 idt_init(void) {
      /* LAB1 YOUR CODE : STEP 2 */
      /* (1) Where are the entry addrs of each Interrupt Service Routine (ISR)?
-      *     All ISR's entry addrs are stored in __vectors. where is uintptr_t __vectors[] ?
+      *     All ISR's entry a
+      extern uintptr_t __vectors[];ddrs are stored in __vectors. where is uintptr_t __vectors[] ?
       *     __vectors[] is in kern/trap/vector.S which is produced by tools/vector.c
       *     (try "make" command in lab1, then you will find vector.S in kern/trap DIR)
       *     You can use  "extern uintptr_t __vectors[];" to define this extern variable which will be used later.
@@ -46,6 +48,20 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+
+      // uintptr_t __vectors[] is defined in vectors.S, so we refer to it using the keyword 'extern'.
+      extern uintptr_t __vectors[];
+      // the length of IDT.
+      const uint32_t length = sizeof(idt) / sizeof(struct gatedesc);
+      // Setup the entries of ISR in IDT.
+      uint32_t i;
+      for(i = 0; i < length; i ++){
+          SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+      }
+      SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_KERNEL);
+      // Tell the CPU where and how long is the IDT,
+      // i.e., load IDT's base address and limit into IDTR.
+      lidt(&idt_pd);
 }
 
 static const char *
@@ -147,6 +163,10 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks ++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
