@@ -738,3 +738,428 @@ trap_dispatch(struct trapframe *tf) {
     }
 }
 ```
+
+# 扩展练习 1
+> 增加syscall，即增加一用户态函数，当内核态初始化完毕后，可以从内核态返回到用户态的函数，而用户态的函数又通过系统
+> 调用得到内核态的服务。
+
+```
+当trap发生时，会在栈上保存相应的寄存器里的信息，以便处理完trap后恢复。
+
+现在我们来分析下当特权级变化中断发生时栈的变化情况，先分析特权态到用户态的转变：
+
+int中断使得eflags、cs、eip被压栈（注意，这里ss、esp并没有被压栈，因为CPL并没有发生变化，但是之后要用上，所以这里要空出两个位置以备用）
+|            |
+|            |
+|   eflags   |
+|   cs       |
+|   eip      | <----- esp
+
+然后操作系统根据中断向量号和IDTR，查找中断向量表，找到中断例程，并跳到相应的中断例程执行。
+中断例程中又压入了错误信息和中断向量号，此时的栈看起来是这样的：
+|            |
+|            |
+|   eflags   |
+|   cs       |
+|   eip      |
+|   err      |
+|   num      | <----- esp
+
+之后，跳到中断处理的通用方法(__alltraps)中，又继续压入了其它寄存器的值：
+|            |
+|            |
+|   eflags   |
+|   cs       |
+|   eip      |
+|   err      |
+|   num      | 
+|   ds       |
+|   es       |
+|   fs       |
+|   gs       |
+|   eax      |
+|   ecx      |
+|   edx      |
+|   ebx      |
+|   esp      | # 此esp没用
+|   ebp      |
+|   esi      |
+|   edi      | <----- esp
+
+接着，又压入了esp的值作为参数传递给trap函数，此时的esp指向的栈正好对应上trapframe结构体：
+|            |
+|            |
+|   eflags   |
+|   cs       |
+|   eip      |
+|   err      |
+|   num      | 
+|   ds       |
+|   es       |
+|   fs       |
+|   gs       |
+|   eax      |
+|   ecx      |
+|   edx      |
+|   ebx      |
+|   esp      | # 此esp没用
+|   ebp      |
+|   esi      |
+|   edi      | <--| # tf 指向这里
+|   esp      |  --|
+
+紧接着，调用了trap函数，后面的栈的变化就不用细看了，因为我们已经得到这个trapframe结构体了。
+接下来的任务就是修改I/O特权级和段寄存器了。
+    stack                                           switchk2u
+|            |                                  |   ss       | --> USER_DS
+|            | <------------------------------- |   esp      |                                  
+|   eflags   |                                  |   eflags   | --> IOPL=3
+|   cs       |                                  |   cs       | --> USER_CS
+|   eip      |                                  |   eip      |
+|   err      |                                  |   err      |
+|   num      |                                  |   num      |
+|   ds       |                                  |   ds       | --> USER_DS
+|   es       |                                  |   es       | --> USER_DS
+|   fs       |                                  |   fs       |
+|   gs       |                                  |   gs       |
+|   eax      |                                  |   eax      |
+|   ecx      |                                  |   ecx      |
+|   edx      |                                  |   edx      |
+|   ebx      |                                  |   ebx      |
+|   esp      | # 此esp没用                       |   esp      |
+|   ebp      |                                  |   ebp      |
+|   esi      |                                  |   esi      |
+|   edi      | # tf 指向这里                |--> |   edi      |
+|   esp      | ----------------------------|  
+|   ...      |                        
+
+然后就是一路出栈，将保存在switchk2u里的内容弹出到相应的寄存器中，最后iret的时候需要注意，此时CPL=0，DPL=3，发生了切换，所以会继续弹出ss和esp。
+
+最后，movl %ebp, %esp，是将esp指向lab1_switch_to_user函数栈帧开始处，使得函数能正常的退回到上一个栈帧。
+
+int之前寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103627	1062439
+ebx            0x10094	65684
+esp            0x7b90	0x7b90
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1001d1	0x1001d1 <lab1_switch_to_user+6>
+eflags         0x206	[ PF IF ]
+cs             0x8	8
+ss             0x10	16
+ds             0x10	16
+es             0x10	16
+fs             0x23	35
+gs             0x23	35
+
+int之后寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103627	1062439
+ebx            0x10094	65684
+esp            0x7b80	0x7b80
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1022c5	0x1022c5 <vector120+2>
+eflags         0x6	[ PF ]
+cs             0x8	8
+ss             0x10	16
+ds             0x10	16
+es             0x10	16
+fs             0x23	35
+gs             0x23	35
+
+iret之前寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103627	1062439
+ebx            0x10094	65684
+esp            0x10f958	0x10f958 <switchk2u+56>
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x101e9a	0x101e9a <__trapret+10>
+eflags         0x2	[ ]
+cs             0x8	8
+ss             0x10	16
+ds             0x23	35
+es             0x23	35
+fs             0x23	35
+gs             0x23	35
+
+iret之后寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103627	1062439
+ebx            0x10094	65684
+esp            0x7b90	0x7b90
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1001d3	0x1001d3 <lab1_switch_to_user+8>
+eflags         0x3206	[ PF IF #12 #13 ]
+cs             0x1b	27
+ss             0x23	35
+ds             0x23	35
+es             0x23	35
+fs             0x23	35
+gs             0x23	35
+```
+
+```
+刚才已经分析了从内核态到用户态的转换，现在来分析从用户态到内核态的转换，思路是差不多的。
+
+int发生时，CPL=3,DPL=0，会发生特权级的转换，所以会压入esp、ss、eflags、cs和eip。
+|   ss       |
+|   esp      |
+|   eflags   |
+|   cs       |
+|   eip      |
+|   err      |
+|   num      | <----- esp
+
+之后的步骤和前面一样
+|   ss       |
+|   esp      |
+|   eflags   |
+|   cs       |
+|   eip      |
+|   err      |
+|   num      | 
+|   ds       |
+|   es       |
+|   fs       |
+|   gs       |
+|   eax      |
+|   ecx      |
+|   edx      |
+|   ebx      |
+|   esp      | # 此esp没用
+|   ebp      |
+|   esi      |
+|   edi      | <--| # tf 指向这里
+|   esp      |  --|
+
+紧接着，调用了trap函数，后面的栈的变化就不用细看了，因为我们已经得到这个trapframe结构体了。
+接下来的任务就是修改I/O特权级和段寄存器了。
+首先，esp中保存着原来的栈的位置，然后往下移动trapframe去掉ss和esp大小的内存，iret的时候没有发生特权级的切换，所以
+用不着这两个，所以不用拷贝。
+    temp                                             stack
+|   ss       |                                  |            |
+|   esp      | -------------------------------> |            |                                  
+|   eflags   | --> IOPL=0                       |            | 
+|   cs       | --> KERNEL_CS                    |            | 
+|   eip      |                                  |            |
+|   err      |                                  |            |
+|   num      |                                  |            |
+|   ds       | --> KERNEL_DS                    |            | 
+|   es       | --> KERNEL_DS                    |            | 
+|   fs       |                                  |            |
+|   gs       |                                  |            |
+|   eax      |                                  |            |
+|   ecx      |                                  |            |
+|   edx      |                                  |            |
+|   ebx      |                                  |            |
+|   esp      | # 此esp没用                       |            |
+|   ebp      |                                  |            |
+|   esi      |                                  |            |
+|   edi      | # tf 指向这里                |--> |            | <-- switchu2k
+|   esp      | ----------------------------|
+|   ...      |   
+
+然后把数据拷贝回原来的栈上，即切换之前的栈上：
+    temp                                             stack
+|   ss       |                                  |            |
+|   esp      | -------------------------------> |            |                                      
+|   eflags   | --> IOPL=0                       |   eflags   | 
+|   cs       | --> KERNEL_CS                    |   cs       | 
+|   eip      |                                  |   eip      |
+|   err      |                                  |   err      |
+|   num      |                                  |   num      |
+|   ds       | --> KERNEL_DS                    |   ds       | 
+|   es       | --> KERNEL_DS                    |   es       | 
+|   fs       |                                  |   fs       |
+|   gs       |                                  |   gs       |
+|   eax      |                                  |   eax      |
+|   ecx      |                                  |   ecx      |
+|   edx      |                                  |   edx      |
+|   ebx      |                                  |   ebx      |
+|   esp      | # 此esp没用                       |   esp      |
+|   ebp      |                                  |   ebp      |
+|   esi      |                                  |   esi      |
+|   edi      | # tf 指向这里                |--> |   edi      | <-- switchu2k
+|   esp      | ----------------------------|
+|   ...      |      
+
+最后，恢复堆栈。
+
+int之前寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103647	1062471
+ebx            0x10094	65684
+esp            0x7b98	0x7b98
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1001da	0x1001da <lab1_switch_to_kernel+3>
+eflags         0x3206	[ PF IF #12 #13 ]
+cs             0x1b	27
+ss             0x23	35
+ds             0x23	35
+es             0x23	35
+fs             0x23	35
+gs             0x23	35
+
+int之后寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103647	1062471
+ebx            0x10094	65684
+esp            0x10fd68	0x10fd68 <stack0+1000>
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1022ce	0x1022ce <vector121+2>
+eflags         0x3006	[ PF #12 #13 ]
+cs             0x8	8
+ss             0x10	16
+ds             0x23	35
+es             0x23	35
+fs             0x23	35
+gs             0x23	35
+
+iret之前寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103647	1062471
+ebx            0x10094	65684
+esp            0x7b8c	0x7b8c
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x101e9a	0x101e9a <__trapret+10>
+eflags         0x3002	[ #12 #13 ]
+cs             0x8	8
+ss             0x10	16
+ds             0x10	16
+es             0x10	16
+fs             0x23	35
+gs             0x23	35
+
+iret之后寄存器的状态：
+eax            0x1e	30
+ecx            0x0	0
+edx            0x103647	1062471
+ebx            0x10094	65684
+esp            0x7b98	0x7b98
+ebp            0x7b98	0x7b98
+esi            0x10094	65684
+edi            0x0	0
+eip            0x1001dc	0x1001dc <lab1_switch_to_kernel+5>
+eflags         0x206	[ PF IF ]
+cs             0x8	8
+ss             0x10	16
+ds             0x10	16
+es             0x10	16
+fs             0x23	35
+gs             0x23	35
+```
+
+```c
+// init.c
+static void
+lab1_switch_to_user(void) {
+    //LAB1 CHALLENGE 1 : TODO
+    asm volatile (
+        "sub 0x8, %%esp \n"
+        "int %0 \n"
+        "movl %%ebp, %%esp \n"
+        :
+        : "i" (T_SWITCH_TOK)
+    );
+}
+
+static void
+lab1_switch_to_kernel(void) {
+    //LAB1 CHALLENGE 1 :  TODO
+    asm volatile (
+        "int %0 \n"
+        "movl %%ebp, %%esp \n"
+        :
+        : "i" (T_SWITCH_TOU))
+    );
+}
+```
+
+```c
+// trap.c
+static void
+trap_dispatch(struct trapframe *tf) {
+    char c;
+
+    switch (tf->tf_trapno) {
+    case IRQ_OFFSET + IRQ_TIMER:
+        /* LAB1 YOUR CODE : STEP 3 */
+        /* handle the timer interrupt */
+        /* (1) After a timer interrupt, you should record this event using a global variable (increase it), such as ticks in kern/driver/clock.c
+         * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
+         * (3) Too Simple? Yes, I think so!
+         */
+        ticks ++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
+        break;
+    case IRQ_OFFSET + IRQ_COM1:
+        c = cons_getc();
+        cprintf("serial [%03d] %c\n", c, c);
+        break;
+    case IRQ_OFFSET + IRQ_KBD:
+        c = cons_getc();
+        cprintf("kbd [%03d] %c\n", c, c);
+        break;
+    //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
+    case T_SWITCH_TOU:
+        if (tf->tf_cs != USER_CS) {
+            switchk2u = *tf;
+            switchk2u.tf_cs = USER_CS;
+            switchk2u.tf_ds = switchk2u.tf_es = switchk2u.tf_ss = USER_DS;
+            switchk2u.tf_esp = (uint32_t)tf + sizeof(struct trapframe) - 8;
+		
+            // set eflags, make sure ucore can use io under user mode.
+            // if CPL > IOPL, then cpu will generate a general protection.
+            switchk2u.tf_eflags |= FL_IOPL_MASK;
+		
+            // set temporary stack
+            // then iret will jump to the right stack
+            *((uint32_t *)tf - 1) = (uint32_t)&switchk2u;
+        }
+        break;
+    case T_SWITCH_TOK:
+        if (tf->tf_cs != KERNEL_CS) {
+            tf->tf_cs = KERNEL_CS;
+            tf->tf_ds = tf->tf_es = KERNEL_DS;
+            tf->tf_eflags &= ~FL_IOPL_MASK;
+            switchu2k = (struct trapframe *)(tf->tf_esp - (sizeof(struct trapframe) - 8));
+            memmove(switchu2k, tf, sizeof(struct trapframe) - 8);
+            *((uint32_t *)tf - 1) = (uint32_t)switchu2k;
+        }
+        break;
+    case IRQ_OFFSET + IRQ_IDE1:
+    case IRQ_OFFSET + IRQ_IDE2:
+        /* do nothing */
+        break;
+    default:
+        // in kernel, it must be a mistake
+        if ((tf->tf_cs & 3) == 0) {
+            print_trapframe(tf);
+            panic("unexpected trap in kernel.\n");
+        }
+    }
+}
+```
